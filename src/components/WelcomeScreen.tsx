@@ -22,6 +22,7 @@ interface Props {
   onStartSolo: () => void;
   onStartAIBattle: (difficulty: BotDifficulty, timeLimit: number) => void;
   onOpenOnlineDuel: () => void;
+  onOpenLocalDuel: () => void;
 }
 
 export const WelcomeScreen: React.FC<Props> = ({
@@ -29,7 +30,8 @@ export const WelcomeScreen: React.FC<Props> = ({
   onOpenSettings,
   onStartSolo,
   onStartAIBattle,
-  onOpenOnlineDuel
+  onOpenOnlineDuel,
+  onOpenLocalDuel
 }) => {
   const [selectedDifficulty, setSelectedDifficulty] = useState<BotDifficulty>('medium');
   const [selectedTimeLimit, setSelectedTimeLimit] = useState<number>(60);
@@ -256,7 +258,7 @@ export const WelcomeScreen: React.FC<Props> = ({
           )}
         </div>
 
-        {/* MODE 3: Online Düello (Gerçek zamanlı oda aç veya koda bağlan) */}
+        {/* MODE 3: Canlı Online Düello */}
         <button
           id="mode-online-btn"
           onClick={() => {
@@ -272,18 +274,48 @@ export const WelcomeScreen: React.FC<Props> = ({
             <div>
               <div className="flex items-center gap-1.5">
                 <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                  Online Düello
+                  Canlı Online Düello
                 </h3>
                 <span className="text-[9px] font-extrabold bg-indigo-100 text-indigo-900 px-2 py-0.2 rounded-full">
-                  Canlı Karşılıklı
+                  Farklı Cihazlar
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 font-medium line-clamp-1">
-                Oda aç, kodu arkadaşına ver, canlı karşılıklı kapış!
+                Oda aç veya koda bağlan, internetten canlı kapış!
               </p>
             </div>
           </div>
           <ChevronRight className="w-5 h-5 text-indigo-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
+        </button>
+
+        {/* MODE 4: Yan Yana Düello (Aynı Cihazda 2 Kişilik) */}
+        <button
+          id="mode-local-duel-btn"
+          onClick={() => {
+            soundManager.playClick();
+            onOpenLocalDuel();
+          }}
+          className="w-full p-3.5 rounded-2xl bg-white border-2 border-emerald-300 hover:border-emerald-500 shadow-sm hover:shadow-md active:scale-[0.99] transition-all text-left flex items-center justify-between cursor-pointer group relative overflow-hidden"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-600 text-white flex items-center justify-center text-xl shadow-md shadow-emerald-400/30 group-hover:scale-105 transition-transform">
+              <span className="text-xl">🤝</span>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-sm font-black text-slate-900 tracking-tight">
+                  Yan Yana Düello
+                </h3>
+                <span className="text-[9px] font-extrabold bg-emerald-100 text-emerald-900 px-2 py-0.2 rounded-full">
+                  Tek Cihaz / 2 Kişi
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium line-clamp-1">
+                Aynı telefondan veya ekrandan sırayla arkadaşınla kapış!
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-5 h-5 text-emerald-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
         </button>
 
       </div>

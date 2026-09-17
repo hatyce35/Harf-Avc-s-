@@ -35,12 +35,15 @@ import {
   getFirstTurkishLetter 
 } from './utils/turkish';
 import { soundManager } from './services/sound';
-import { validateRoundAnswers } from './services/validator';
+import { validateRoundAnswers, ValidationResult } from './services/validator';
 import { profileManager, UserProfile } from './services/profileManager';
+import { onlineService } from './services/onlineService';
 import { generateRandomBot, GeneratedBot, BotDifficulty, BOT_DIFFICULTIES } from './data/botGenerator';
 import { InitialProfileModal } from './components/InitialProfileModal';
 import { SettingsModal } from './components/SettingsModal';
 import { OnlineLobbyModal } from './components/OnlineLobbyModal';
+import { LocalDuelSetupModal } from './components/LocalDuelSetupModal';
+import { LocalDuelPassScreen } from './components/LocalDuelPassScreen';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { RoundResultScreen, CategoryResultItem } from './components/RoundResultScreen';
 import { TournamentEndModal } from './components/TournamentEndModal';
@@ -66,8 +69,8 @@ export const CATEGORIES: CategoryConfig[] = [
   { id: 'country', name: 'Ülke', subText: 'Bağımsız dünya ülkesi', icon: Globe, placeholder: 'ülke yazın...' },
 ];
 
-export type AppView = 'welcome' | 'playing' | 'round_results';
-export type ActiveMode = 'solo' | 'ai' | 'online';
+export type AppView = 'welcome' | 'playing' | 'round_results' | 'local_pass';
+export type ActiveMode = 'solo' | 'ai' | 'online' | 'local_duel';
 
 export default function App() {
   // --- USER PROFILE & SETTINGS ---
@@ -79,6 +82,32 @@ export default function App() {
   });
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showOnlineLobby, setShowOnlineLobby] = useState<boolean>(false);
+  const [showLocalDuelModal, setShowLocalDuelModal] = useState<boolean>(false);
+  const [initialRoomCode, setInitialRoomCode] = useState<string>('');
+
+  // Local duel state (Yan Yana Düello)
+  const [localP1, setLocalP1] = useState<{ name: string; avatar: string; answers: Record<string, string> }>({
+    name: 'Oyuncu 1',
+    avatar: '🦊',
+    answers: {}
+  });
+  const [localP2, setLocalP2] = useState<{ name: string; avatar: string; answers: Record<string, string> }>({
+    name: 'Oyuncu 2',
+    avatar: '🦁',
+    answers: {}
+  });
+  const [localActivePlayer, setLocalActivePlayer] = useState<1 | 2>(1);
+
+  // Auto-detect room code from URL (e.g. ?oda=HA-4821)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('oda') || params.get('room') || params.get('join');
+    if (code) {
+      setInitialRoomCode(code);
+      setShowOnlineLobby(true);
+    }
+  }, []);
+
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('harf_avcisi_sound');
     return saved !== null ? saved === 'true' : true;
@@ -196,85 +225,66 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentView, gameMode, botProgressCount, botOpponent]);
 
-  // --- ONLINE POLLING LOOP ---
+  // --- REAL-TIME ONLINE MULTIPLAYER SUBSCRIPTIONS ---
   useEffect(() => {
-    if (gameMode !== 'online' || !onlineRoomCode) return;
+    if (gameMode !== 'online') return;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/rooms/${onlineRoomCode}?playerId=${onlinePlayerId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const room = data.room;
-        if (!room) return;
-        setOnlineRoomState(room);
+    const unsubRoom = onlineService.onRoomUpdate((room) => {
+      setOnlineRoomState(room);
 
-        // Synchronize letter and round number
-        if (room.currentLetter && room.currentLetter !== targetLetter) {
-          setTargetLetter(room.currentLetter);
+      // Synchronize letter and round number
+      if (room.currentLetter && room.currentLetter !== targetLetter) {
+        setTargetLetter(room.currentLetter);
+        resetRoundInputs();
+        if (room.roundTimeLimit) {
+          setTimeLeft(room.roundTimeLimit);
         }
-        if (room.roundNumber) {
-          setRoundNumber(room.roundNumber);
-        }
-
-        // Opponent pressed DUR!
-        if (room.status === 'scored' && currentView === 'playing') {
-          handleOnlineScored(room);
-        } else if (room.status === 'finished') {
-          handleOnlineScored(room);
-          setShowTournamentEnd(true);
-        }
-      } catch (err) {
-        console.warn('Online sync error:', err);
       }
-    }, 1100);
+      if (room.roundNumber) {
+        setRoundNumber(room.roundNumber);
+      }
 
-    return () => clearInterval(interval);
-  }, [gameMode, onlineRoomCode, onlinePlayerId, currentView, targetLetter]);
-
-  // Handle Online Scored from Server
-  const handleOnlineScored = (room: any) => {
-    const playerIds = Object.keys(room.players);
-    const myId = onlinePlayerId;
-    const opponentId = playerIds.find(id => id !== myId);
-
-    const me = room.players[myId] || { roundScore: 0, totalScore: 0 };
-    const opp = opponentId ? room.players[opponentId] : { roundScore: 0, totalScore: 0 };
-
-    setP1RoundScore(me.roundScore || 0);
-    setP1TournamentScore(me.totalScore || 0);
-    setP2RoundScore(opp.roundScore || 0);
-    setP2TournamentScore(opp.totalScore || 0);
-
-    // Build category results
-    const catItems: CategoryResultItem[] = CATEGORIES.map(cat => {
-      const r = room.results?.[cat.id] || {};
-      const isP1Host = playerIds[0] === myId;
-      const myWord = isP1Host ? r.p1Answer : r.p2Answer;
-      const myStatus = isP1Host ? r.p1Status : r.p2Status;
-      const myPts = isP1Host ? r.p1Points : r.p2Points;
-      const oppWord = isP1Host ? r.p2Answer : r.p1Answer;
-      const oppStatus = isP1Host ? r.p2Status : r.p1Status;
-      const oppPts = isP1Host ? r.p2Points : r.p1Points;
-
-      return {
-        categoryId: cat.id,
-        categoryName: cat.name,
-        icon: cat.icon,
-        p1Word: myWord || '',
-        p1Status: myStatus || 'empty',
-        p1Points: myPts || 0,
-        p2Word: oppWord || '',
-        p2Status: oppStatus || 'empty',
-        p2Points: oppPts || 0,
-        isPisti: r.isPisti
-      };
+      if (room.status === 'playing' && currentView !== 'playing') {
+        setCurrentView('playing');
+      } else if (room.status === 'finished') {
+        setShowTournamentEnd(true);
+      }
     });
 
-    setCategoryResults(catItems);
-    setCurrentView('round_results');
-    soundManager.playFanfare();
-  };
+    const unsubScored = onlineService.onScored((room, results) => {
+      setOnlineRoomState(room);
+      const playerIds = Object.keys(room.players || {});
+      const myId = onlinePlayerId || onlineService.getPlayerId();
+      const oppId = playerIds.find(id => id !== myId);
+
+      const me = room.players[myId] || { roundScore: 0, totalScore: 0 };
+      const opp = oppId && room.players[oppId] ? room.players[oppId] : { roundScore: 0, totalScore: 0 };
+
+      setP1RoundScore(me.roundScore || 0);
+      setP1TournamentScore(me.totalScore || 0);
+      setP2RoundScore(opp.roundScore || 0);
+      setP2TournamentScore(opp.totalScore || 0);
+
+      // Fill in category icons from CATEGORIES
+      const resultsWithIcons: CategoryResultItem[] = results.map(r => {
+        const catConfig = CATEGORIES.find(c => c.id === r.categoryId);
+        return {
+          ...r,
+          icon: catConfig?.icon || null
+        };
+      });
+
+      setCategoryResults(resultsWithIcons);
+      setIsValidating(false);
+      setCurrentView('round_results');
+      soundManager.playFanfare();
+    });
+
+    return () => {
+      unsubRoom();
+      unsubScored();
+    };
+  }, [gameMode, onlinePlayerId, currentView, targetLetter]);
 
   // Keep fresh reference of handleDur for timer callback
   useEffect(() => {
@@ -364,6 +374,39 @@ export default function App() {
     setCurrentView('playing');
   };
 
+  // 4. Start Local Duel (Aynı Cihazda 2 Kişilik)
+  const handleStartLocalDuel = (
+    p1: { name: string; avatar: string },
+    p2: { name: string; avatar: string },
+    timeLimit: number
+  ) => {
+    soundManager.playLetterReveal();
+    setLocalP1({ name: p1.name, avatar: p1.avatar, answers: {} });
+    setLocalP2({ name: p2.name, avatar: p2.avatar, answers: {} });
+    setLocalActivePlayer(1);
+    setGameMode('local_duel');
+    setRoundTimeLimit(timeLimit);
+    setTimeLeft(timeLimit);
+    setRoundNumber(1);
+    setP1TournamentScore(0);
+    setP2TournamentScore(0);
+    const nextLetter = NORMAL_LETTERS[Math.floor(Math.random() * NORMAL_LETTERS.length)];
+    setTargetLetter(nextLetter);
+    resetRoundInputs();
+    setShowLocalDuelModal(false);
+    setCurrentView('playing');
+  };
+
+  const handleStartP2Turn = () => {
+    soundManager.playLetterReveal();
+    setLocalActivePlayer(2);
+    resetRoundInputs();
+    if (roundTimeLimit) {
+      setTimeLeft(roundTimeLimit);
+    }
+    setCurrentView('playing');
+  };
+
   // Reset round inputs
   const resetRoundInputs = () => {
     setAnswers({
@@ -390,18 +433,87 @@ export default function App() {
     setIsValidating(true);
 
     if (gameMode === 'online') {
-      // Send DUR to server
       try {
-        await fetch(`/api/rooms/${onlineRoomCode}/dur`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId: onlinePlayerId })
-        });
+        await onlineService.sendDur(answers);
       } catch (err) {
         console.error('Online dur error:', err);
       }
       setIsValidating(false);
       return;
+    }
+
+    // Local Duel: 1. Oyuncu ve 2. Oyuncu sırayla oynar
+    if (gameMode === 'local_duel') {
+      if (localActivePlayer === 1) {
+        setLocalP1(prev => ({ ...prev, answers: { ...answers } }));
+        setIsValidating(false);
+        setCurrentView('local_pass');
+        return;
+      } else {
+        // 2. Oyuncu bitirdi, iki tarafın cevaplarını değerlendir
+        const p1Answers = localP1.answers;
+        const p2Answers = { ...answers };
+        setLocalP2(prev => ({ ...prev, answers: p2Answers }));
+
+        const p1Validation = await validateRoundAnswers(targetLetter, p1Answers);
+        const p2Validation = await validateRoundAnswers(targetLetter, p2Answers);
+
+        let roundP1Pts = 0;
+        let roundP2Pts = 0;
+
+        const catResults: CategoryResultItem[] = CATEGORIES.map(cat => {
+          const w1Raw = (p1Answers[cat.id] || '').trim();
+          const w2Raw = (p2Answers[cat.id] || '').trim();
+
+          const res1: ValidationResult = p1Validation[cat.id] || { isValid: false, status: 'empty', points: 0, word: w1Raw, corrected: undefined };
+          const res2: ValidationResult = p2Validation[cat.id] || { isValid: false, status: 'empty', points: 0, word: w2Raw, corrected: undefined };
+
+          const w1Clean = (res1.corrected || w1Raw).toLocaleLowerCase('tr-TR');
+          const w2Clean = (res2.corrected || w2Raw).toLocaleLowerCase('tr-TR');
+
+          let isPisti = false;
+          let p1Pts = res1.points;
+          let p2Pts = res2.points;
+          let p1Status = res1.status;
+          let p2Status = res2.status;
+
+          // PİŞTİ: İkisi de geçerli ve aynı kelimeyi yazdıysa 5'er puan
+          if (res1.isValid && res2.isValid && w1Clean.length > 0 && w1Clean === w2Clean) {
+            isPisti = true;
+            p1Status = 'pisti';
+            p2Status = 'pisti';
+            p1Pts = 5;
+            p2Pts = 5;
+          }
+
+          roundP1Pts += p1Pts;
+          roundP2Pts += p2Pts;
+
+          return {
+            categoryId: cat.id,
+            categoryName: cat.name,
+            icon: cat.icon,
+            p1Word: w1Raw,
+            p1Status,
+            p1Points: p1Pts,
+            p1Corrected: res1.corrected,
+            p2Word: w2Raw,
+            p2Status,
+            p2Points: p2Pts,
+            p2Corrected: res2.corrected,
+            isPisti
+          };
+        });
+
+        setP1RoundScore(roundP1Pts);
+        setP2RoundScore(roundP2Pts);
+        setP1TournamentScore(prev => prev + roundP1Pts);
+        setP2TournamentScore(prev => prev + roundP2Pts);
+        setCategoryResults(catResults);
+        setIsValidating(false);
+        setCurrentView('round_results');
+        return;
+      }
     }
 
     // Local evaluation for Solo or AI Battle
@@ -529,10 +641,25 @@ export default function App() {
 
     if (gameMode === 'online') {
       try {
-        await fetch(`/api/rooms/${onlineRoomCode}/next-round`, { method: 'POST' });
+        await onlineService.nextRound();
       } catch (err) {
         console.error('Next round error:', err);
       }
+      return;
+    }
+
+    if (gameMode === 'local_duel') {
+      setLocalActivePlayer(1);
+      const nextRoundNum = roundNumber + 1;
+      setRoundNumber(nextRoundNum);
+      const candidates = NORMAL_LETTERS.filter(l => l !== targetLetter);
+      const nextLetter = candidates[Math.floor(Math.random() * candidates.length)];
+      setTargetLetter(nextLetter);
+      if (roundTimeLimit) {
+        setTimeLeft(roundTimeLimit);
+      }
+      resetRoundInputs();
+      setCurrentView('playing');
       return;
     }
 
@@ -570,10 +697,19 @@ export default function App() {
 
     if (gameMode === 'online') {
       try {
-        await fetch(`/api/rooms/${onlineRoomCode}/rematch`, { method: 'POST' });
+        await onlineService.rematch();
       } catch (err) {
         console.error('Online rematch error:', err);
       }
+      return;
+    }
+
+    if (gameMode === 'local_duel') {
+      setLocalActivePlayer(1);
+      const nextLetter = NORMAL_LETTERS[Math.floor(Math.random() * NORMAL_LETTERS.length)];
+      setTargetLetter(nextLetter);
+      resetRoundInputs();
+      setCurrentView('playing');
       return;
     }
 
@@ -591,12 +727,8 @@ export default function App() {
 
   const handleExitGame = () => {
     soundManager.playClick();
-    if (gameMode === 'online' && onlineRoomCode) {
-      fetch(`/api/rooms/${onlineRoomCode}/leave`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId: onlinePlayerId })
-      }).catch(() => {});
+    if (gameMode === 'online') {
+      onlineService.leaveRoom();
     }
 
     resetRoundInputs();
@@ -615,12 +747,8 @@ export default function App() {
     setAnswers(updated);
 
     // If online, sync progress
-    if (gameMode === 'online' && onlineRoomCode) {
-      fetch(`/api/rooms/${onlineRoomCode}/progress`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId: onlinePlayerId, answers: updated })
-      }).catch(() => {});
+    if (gameMode === 'online') {
+      onlineService.sendProgress(updated);
     }
   };
 
@@ -680,17 +808,29 @@ export default function App() {
           onClose={() => setShowOnlineLobby(false)}
           activeProfile={activeProfile}
           onRoomReady={handleOnlineRoomReady}
+          initialRoomCode={initialRoomCode}
+        />
+      )}
+
+      {/* 3.5 LOCAL DUEL SETUP MODAL (Yan Yana Düello) */}
+      {activeProfile && (
+        <LocalDuelSetupModal
+          isOpen={showLocalDuelModal}
+          onClose={() => setShowLocalDuelModal(false)}
+          defaultP1Name={activeProfile.name}
+          defaultP1Avatar={activeProfile.avatar}
+          onStartDuel={handleStartLocalDuel}
         />
       )}
 
       {/* 4. 10-ROUND TOURNAMENT END MODAL ("Oyundan Çık" & "Rövanş Teklif Et") */}
       <TournamentEndModal
         isOpen={showTournamentEnd}
-        p1Name={activeProfile?.name || 'Oyuncu'}
-        p1Avatar={activeProfile?.avatar || '🦊'}
+        p1Name={gameMode === 'local_duel' ? localP1.name : (activeProfile?.name || 'Oyuncu')}
+        p1Avatar={gameMode === 'local_duel' ? localP1.avatar : (activeProfile?.avatar || '🦊')}
         p1Score={p1TournamentScore}
-        p2Name={gameMode === 'ai' ? botOpponent.name : gameMode === 'online' ? getOnlineOpponent().name : undefined}
-        p2Avatar={gameMode === 'ai' ? botOpponent.avatar : gameMode === 'online' ? getOnlineOpponent().avatar : undefined}
+        p2Name={gameMode === 'local_duel' ? localP2.name : (gameMode === 'ai' ? botOpponent.name : gameMode === 'online' ? getOnlineOpponent().name : undefined)}
+        p2Avatar={gameMode === 'local_duel' ? localP2.avatar : (gameMode === 'ai' ? botOpponent.avatar : gameMode === 'online' ? getOnlineOpponent().avatar : undefined)}
         p2Score={p2TournamentScore}
         hasOpponent={gameMode !== 'solo'}
         onExitGame={handleExitGame}
@@ -709,7 +849,22 @@ export default function App() {
           onStartSolo={handleStartSolo}
           onStartAIBattle={handleStartAIBattle}
           onOpenOnlineDuel={() => setShowOnlineLobby(true)}
+          onOpenLocalDuel={() => setShowLocalDuelModal(true)}
         />
+      )}
+
+      {/* VIEW 1.5: LOCAL DUEL PASS SCREEN (Aynı Cihazda Sıra Değişimi) */}
+      {currentView === 'local_pass' && (
+        <div className="w-full h-full max-w-md mx-auto flex items-center justify-center py-2">
+          <LocalDuelPassScreen
+            nextPlayerNumber={2}
+            nextPlayerName={localP2.name}
+            nextPlayerAvatar={localP2.avatar}
+            targetLetter={targetLetter}
+            roundNumber={roundNumber}
+            onReadyToPlay={handleStartP2Turn}
+          />
+        </div>
       )}
 
       {/* VIEW 2: ROUND RESULT SCREEN (6 Kompakt Satır, Yeşil/Sarı/Kırmızı, 10s Sayaç) */}
@@ -719,12 +874,12 @@ export default function App() {
             targetLetter={targetLetter}
             roundNumber={roundNumber}
             maxRounds={MAX_ROUNDS}
-            p1Name={activeProfile.name}
-            p1Avatar={activeProfile.avatar}
+            p1Name={gameMode === 'local_duel' ? localP1.name : activeProfile.name}
+            p1Avatar={gameMode === 'local_duel' ? localP1.avatar : activeProfile.avatar}
             p1RoundScore={p1RoundScore}
             p1TotalScore={p1TournamentScore}
-            p2Name={gameMode === 'ai' ? botOpponent.name : gameMode === 'online' ? getOnlineOpponent().name : undefined}
-            p2Avatar={gameMode === 'ai' ? botOpponent.avatar : gameMode === 'online' ? getOnlineOpponent().avatar : undefined}
+            p2Name={gameMode === 'local_duel' ? localP2.name : (gameMode === 'ai' ? botOpponent.name : gameMode === 'online' ? getOnlineOpponent().name : undefined)}
+            p2Avatar={gameMode === 'local_duel' ? localP2.avatar : (gameMode === 'ai' ? botOpponent.avatar : gameMode === 'online' ? getOnlineOpponent().avatar : undefined)}
             p2RoundScore={p2RoundScore}
             p2TotalScore={p2TournamentScore}
             hasOpponent={gameMode !== 'solo'}
@@ -756,7 +911,11 @@ export default function App() {
             {/* Round / Mode indicator */}
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-black text-slate-700 bg-slate-100 border border-slate-200 px-3 py-1 rounded-xl">
-                {gameMode === 'solo' ? 'Solo Pratik' : `Tur ${roundNumber} / ${MAX_ROUNDS}`}
+                {gameMode === 'solo' 
+                  ? 'Solo Pratik' 
+                  : gameMode === 'local_duel'
+                  ? `Yan Yana Düello • Tur ${roundNumber} / ${MAX_ROUNDS}`
+                  : `Tur ${roundNumber} / ${MAX_ROUNDS}`}
               </span>
             </div>
 
@@ -773,72 +932,114 @@ export default function App() {
 
           {/* ARENA: 1. Oyuncu vs 2. Oyuncu (Live Progress) */}
           <section className="bg-white/95 border border-slate-200/80 rounded-2xl px-3 py-2 shrink-0 shadow-2xs">
-            <div className="flex items-center justify-between">
-              
-              {/* Player 1 (You) */}
-              <div className="flex items-center gap-2">
-                <div className={`w-8 h-8 rounded-xl ${activeProfile.color} text-white flex items-center justify-center text-base shadow-xs shrink-0`}>
-                  {activeProfile.avatar}
-                </div>
-                <div>
-                  <div className="text-xs font-black text-slate-900 leading-tight">
-                    {activeProfile.name} (Sen)
+            {gameMode === 'local_duel' ? (
+              <div className="flex items-center justify-between">
+                {/* Local Player 1 */}
+                <div className={`flex items-center gap-2 p-1.5 rounded-xl transition-all ${localActivePlayer === 1 ? 'bg-amber-50 ring-2 ring-amber-300' : 'opacity-60'}`}>
+                  <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center text-base shadow-xs shrink-0">
+                    {localP1.avatar}
                   </div>
-                  {/* Filled Dots */}
-                  <div className="flex items-center gap-1 mt-0.5">
-                    {CATEGORIES.map((_, i) => (
-                      <div
-                        key={i}
-                        className={`w-2 h-2 rounded-full transition-all ${
-                          i < filledCount ? 'bg-emerald-500 ring-1 ring-emerald-300 scale-110' : 'bg-slate-200'
-                        }`}
-                      />
-                    ))}
-                    <span className="text-[10px] font-bold text-slate-500 ml-1">
-                      {filledCount}/6
+                  <div>
+                    <div className="text-xs font-black text-slate-900 leading-tight flex items-center gap-1">
+                      <span>{localP1.name}</span>
+                      {localActivePlayer === 1 && (
+                        <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.5 rounded-md font-extrabold">Sıra Sende</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500">
+                      {localActivePlayer === 1 
+                        ? `${filledCount}/6 kelime` 
+                        : `${Object.keys(localP1.answers).filter(k => (localP1.answers[k] || '').trim().length > 0).length}/6 tamamlandı`}
                     </span>
                   </div>
                 </div>
-              </div>
 
-              {/* Opponent Progress (AI / Online) */}
-              {gameMode !== 'solo' ? (
-                <div className="flex items-center justify-end gap-2 text-right">
+                <span className="text-xs font-black text-slate-400 font-display">VS</span>
+
+                {/* Local Player 2 */}
+                <div className={`flex items-center justify-end gap-2 text-right p-1.5 rounded-xl transition-all ${localActivePlayer === 2 ? 'bg-purple-50 ring-2 ring-purple-300' : 'opacity-60'}`}>
                   <div>
-                    <div className="text-xs font-black text-slate-900 leading-tight">
-                      {gameMode === 'ai' ? botOpponent.name : getOnlineOpponent().name}
+                    <div className="text-xs font-black text-slate-900 leading-tight flex items-center justify-end gap-1">
+                      {localActivePlayer === 2 && (
+                        <span className="text-[9px] bg-purple-600 text-white px-1.5 py-0.5 rounded-md font-extrabold">Sıra Sende</span>
+                      )}
+                      <span>{localP2.name}</span>
                     </div>
-                    {/* Opponent Dots */}
-                    <div className="flex items-center justify-end gap-1 mt-0.5">
-                      <span className="text-[10px] font-bold text-slate-500 mr-1">
-                        {gameMode === 'ai' ? botProgressCount : getOnlineOpponent().filledCount || 0}/6
-                      </span>
-                      {CATEGORIES.map((_, i) => {
-                        const count = gameMode === 'ai' ? botProgressCount : (getOnlineOpponent().filledCount || 0);
-                        return (
-                          <div
-                            key={i}
-                            className={`w-2 h-2 rounded-full transition-all ${
-                              i < count ? 'bg-purple-500 ring-1 ring-purple-300 scale-110' : 'bg-slate-200'
-                            }`}
-                          />
-                        );
-                      })}
-                    </div>
+                    <span className="text-[10px] font-bold text-slate-500">
+                      {localActivePlayer === 2 ? `${filledCount}/6 kelime` : 'Sırasını bekliyor'}
+                    </span>
                   </div>
                   <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center text-base shadow-xs shrink-0">
-                    {gameMode === 'ai' ? botOpponent.avatar : getOnlineOpponent().avatar || '🎮'}
+                    {localP2.avatar}
                   </div>
                 </div>
-              ) : (
-                <div className="text-right">
-                  <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                    Süre Sınırı Yok
-                  </span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                {/* Player 1 (You) */}
+                <div className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded-xl ${activeProfile.color} text-white flex items-center justify-center text-base shadow-xs shrink-0`}>
+                    {activeProfile.avatar}
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-slate-900 leading-tight">
+                      {activeProfile.name} (Sen)
+                    </div>
+                    {/* Filled Dots */}
+                    <div className="flex items-center gap-1 mt-0.5">
+                      {CATEGORIES.map((_, i) => (
+                        <div
+                          key={i}
+                          className={`w-2 h-2 rounded-full transition-all ${
+                            i < filledCount ? 'bg-emerald-500 ring-1 ring-emerald-300 scale-110' : 'bg-slate-200'
+                          }`}
+                        />
+                      ))}
+                      <span className="text-[10px] font-bold text-slate-500 ml-1">
+                        {filledCount}/6
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              )}
 
-            </div>
+                {/* Opponent Progress (AI / Online) */}
+                {gameMode !== 'solo' ? (
+                  <div className="flex items-center justify-end gap-2 text-right">
+                    <div>
+                      <div className="text-xs font-black text-slate-900 leading-tight">
+                        {gameMode === 'ai' ? botOpponent.name : getOnlineOpponent().name}
+                      </div>
+                      {/* Opponent Dots */}
+                      <div className="flex items-center justify-end gap-1 mt-0.5">
+                        <span className="text-[10px] font-bold text-slate-500 mr-1">
+                          {gameMode === 'ai' ? botProgressCount : getOnlineOpponent().filledCount || 0}/6
+                        </span>
+                        {CATEGORIES.map((_, i) => {
+                          const count = gameMode === 'ai' ? botProgressCount : (getOnlineOpponent().filledCount || 0);
+                          return (
+                            <div
+                              key={i}
+                              className={`w-2 h-2 rounded-full transition-all ${
+                                i < count ? 'bg-purple-500 ring-1 ring-purple-300 scale-110' : 'bg-slate-200'
+                              }`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center text-base shadow-xs shrink-0">
+                      {gameMode === 'ai' ? botOpponent.avatar : getOnlineOpponent().avatar || '🎮'}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-right">
+                    <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                      Süre Sınırı Yok
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           {/* TIMER BAR (30s, 45s, 60s, 120s limit for AI battles and Online duels) */}

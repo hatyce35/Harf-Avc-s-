@@ -3,7 +3,7 @@ import { TURKISH_DICTIONARY } from '../data/wordDatabase';
 
 export interface ValidationResult {
   isValid: boolean;
-  status: 'valid' | 'typo' | 'wrong' | 'empty';
+  status: 'valid' | 'typo' | 'wrong' | 'empty' | 'pisti';
   points: number;
   word: string;
   corrected?: string;

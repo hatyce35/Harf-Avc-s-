@@ -1,12 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { X, Copy, Check, Users, Loader2, Play, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
+import { 
+  X, 
+  Copy, 
+  Check, 
+  Users, 
+  Loader2, 
+  Play, 
+  ArrowRight, 
+  Share2, 
+  ExternalLink,
+  MessageCircle,
+  Clock,
+  Sparkles
+} from 'lucide-react';
 import { UserProfile } from '../services/profileManager';
 import { soundManager } from '../services/sound';
+import { onlineService } from '../services/onlineService';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   activeProfile: UserProfile;
+  initialRoomCode?: string;
   onRoomReady: (room: any, playerId: string) => void;
 }
 
@@ -14,13 +29,15 @@ export const OnlineLobbyModal: React.FC<Props> = ({
   isOpen,
   onClose,
   activeProfile,
+  initialRoomCode = '',
   onRoomReady
 }) => {
   const [mode, setMode] = useState<'select' | 'create' | 'join'>('select');
   const [createdRoomCode, setCreatedRoomCode] = useState('');
   const [myPlayerId, setMyPlayerId] = useState('');
   const [inputCode, setInputCode] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -33,28 +50,30 @@ export const OnlineLobbyModal: React.FC<Props> = ({
     { value: 120, label: '120 sn', desc: 'Geniş' },
   ];
 
-  // Poll room status when host is waiting for guest
+  // Auto-detect initial room code from URL params
   useEffect(() => {
-    if (!isWaiting || !createdRoomCode) return;
+    if (initialRoomCode) {
+      setInputCode(initialRoomCode);
+      setMode('join');
+    }
+  }, [initialRoomCode]);
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/rooms/${createdRoomCode}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const room = data.room;
-        if (room && room.status === 'playing') {
-          soundManager.playFanfare();
-          setIsWaiting(false);
-          onRoomReady(room, myPlayerId);
-        }
-      } catch (err) {
-        console.warn('Room poll error:', err);
+  // Listen for room updates when host is waiting for guest
+  useEffect(() => {
+    if (!isWaiting) return;
+
+    const unsubscribe = onlineService.onRoomUpdate((room) => {
+      if (room.status === 'playing') {
+        soundManager.playFanfare();
+        setIsWaiting(false);
+        onRoomReady(room, myPlayerId || onlineService.getPlayerId());
       }
-    }, 1200);
+    });
 
-    return () => clearInterval(interval);
-  }, [isWaiting, createdRoomCode, myPlayerId, onRoomReady]);
+    return () => {
+      unsubscribe();
+    };
+  }, [isWaiting, myPlayerId, onRoomReady]);
 
   if (!isOpen) return null;
 
@@ -64,26 +83,16 @@ export const OnlineLobbyModal: React.FC<Props> = ({
     setError('');
     soundManager.playClick();
     try {
-      const res = await fetch('/api/rooms/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          hostName: activeProfile.name,
-          hostAvatar: activeProfile.avatar,
-          roundTimeLimit: selectedTimeLimit
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCreatedRoomCode(data.roomCode);
-        setMyPlayerId(data.playerId);
-        setMode('create');
-        setIsWaiting(true);
-      } else {
-        setError('Oda oluşturulamadı, tekrar deneyin.');
-      }
-    } catch {
-      setError('Bağlantı hatası.');
+      const { room, playerId } = await onlineService.createRoom(
+        { name: activeProfile.name, avatar: activeProfile.avatar },
+        selectedTimeLimit
+      );
+      setCreatedRoomCode(room.code);
+      setMyPlayerId(playerId);
+      setMode('create');
+      setIsWaiting(true);
+    } catch (err: any) {
+      setError(err?.message || 'Oda oluşturulamadı, lütfen tekrar deneyin.');
     } finally {
       setLoading(false);
     }
@@ -92,8 +101,9 @@ export const OnlineLobbyModal: React.FC<Props> = ({
   // Handle Guest: Join Room
   const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputCode.trim()) {
-      setError('Lütfen oda kodunu giriniz.');
+    const clean = onlineService.normalizeCode(inputCode);
+    if (!clean || clean.length < 4) {
+      setError('Lütfen 4 haneli oda kodunu giriniz.');
       return;
     }
     setLoading(true);
@@ -101,35 +111,51 @@ export const OnlineLobbyModal: React.FC<Props> = ({
     soundManager.playClick();
 
     try {
-      const res = await fetch('/api/rooms/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomCode: inputCode.trim(),
-          guestName: activeProfile.name,
-          guestAvatar: activeProfile.avatar
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        soundManager.playFanfare();
-        onRoomReady(data.room, data.playerId);
-      } else {
-        setError(data.error || 'Odaya katılamadı.');
-      }
-    } catch {
-      setError('Bağlantı kurulamadı.');
+      const { room, playerId } = await onlineService.joinRoom(
+        clean,
+        { name: activeProfile.name, avatar: activeProfile.avatar }
+      );
+      soundManager.playFanfare();
+      onRoomReady(room, playerId);
+    } catch (err: any) {
+      setError(err?.message || 'Odaya bağlanılamadı. Kodu kontrol edin.');
     } finally {
       setLoading(false);
     }
   };
 
+  const getInviteUrl = () => {
+    const origin = window.location.origin;
+    const pathname = window.location.pathname;
+    return `${origin}${pathname}?oda=${createdRoomCode}`;
+  };
+
   const handleCopyCode = () => {
     if (!createdRoomCode) return;
     navigator.clipboard.writeText(createdRoomCode);
-    setCopied(true);
+    setCodeCopied(true);
     soundManager.playClick();
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCodeCopied(false), 2500);
+  };
+
+  const handleCopyLink = () => {
+    if (!createdRoomCode) return;
+    navigator.clipboard.writeText(getInviteUrl());
+    setLinkCopied(true);
+    soundManager.playClick();
+    setTimeout(() => setLinkCopied(false), 2500);
+  };
+
+  const handleShareWhatsApp = () => {
+    const url = getInviteUrl();
+    const msg = `Harf Avcısı (İsim Şehir Hayvan) canlı düellosuna davet edildin!\nOda Kodu: ${createdRoomCode}\nKatılmak için tıkla: ${url}`;
+    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank');
+  };
+
+  const handleOpenSecondTabTest = () => {
+    const url = getInviteUrl();
+    window.open(url, '_blank');
   };
 
   return (
@@ -147,16 +173,17 @@ export const OnlineLobbyModal: React.FC<Props> = ({
             </div>
             <div>
               <h2 className="text-base font-black text-slate-900 tracking-tight font-display leading-none">
-                Online Düello
+                Canlı Online Düello
               </h2>
               <span className="text-[10px] text-slate-500 font-medium">
-                Canlı Karşılıklı İsim Şehir
+                Gerçek Zamanlı İsim Şehir Karşılaşması
               </span>
             </div>
           </div>
           <button
             onClick={() => {
               setIsWaiting(false);
+              onlineService.leaveRoom();
               onClose();
             }}
             className="p-1.5 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
@@ -169,14 +196,16 @@ export const OnlineLobbyModal: React.FC<Props> = ({
         {mode === 'select' && (
           <div className="space-y-3 py-1">
             <p className="text-xs text-slate-600 text-center font-medium leading-relaxed">
-              Arkadaşınla gerçek zamanlı karşılıklı oyna! İster yeni bir oda açıp kodunu paylaş, ister arkadaşının kodunu gir.
+              Arkadaşınla farklı telefonlardan veya bilgisayarlardan canlı yarış! Biriniz oda açıp kod verir, diğeri kodla katılır.
             </p>
 
             <div className="grid grid-cols-1 gap-2.5 pt-1">
+              
+              {/* Option 1: Create Room */}
               <div className="p-3.5 rounded-2xl bg-indigo-50/70 border-2 border-indigo-200 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-base">⏱️</span>
+                    <Clock className="w-3.5 h-3.5 text-indigo-600" />
                     <span className="text-xs font-black text-indigo-950">Tur Süresi Seç:</span>
                   </div>
                   <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-md">
@@ -218,8 +247,15 @@ export const OnlineLobbyModal: React.FC<Props> = ({
                   <span>Odayı Oluştur ve Kod Al ({selectedTimeLimit} sn)</span>
                   {loading && <Loader2 className="w-4 h-4 animate-spin ml-1" />}
                 </button>
+
+                {error && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold text-center">
+                    {error}
+                  </div>
+                )}
               </div>
 
+              {/* Option 2: Join Room */}
               <button
                 onClick={() => {
                   setError('');
@@ -232,8 +268,8 @@ export const OnlineLobbyModal: React.FC<Props> = ({
                     🔑
                   </div>
                   <div className="text-left">
-                    <div className="leading-tight">Odaya Katıl</div>
-                    <div className="text-[10px] text-slate-500 font-normal">Arkadaşının verdiği kod numarasını gir</div>
+                    <div className="leading-tight font-black">Odaya Katıl</div>
+                    <div className="text-[10px] text-slate-500 font-normal">Arkadaşının verdiği 4 haneli kodu gir</div>
                   </div>
                 </div>
                 <ArrowRight className="w-4 h-4 text-slate-400" />
@@ -244,49 +280,73 @@ export const OnlineLobbyModal: React.FC<Props> = ({
 
         {/* Host Waiting View */}
         {mode === 'create' && (
-          <div className="space-y-4 text-center py-2">
-            <div className="bg-indigo-50/80 border-2 border-dashed border-indigo-300 rounded-2xl p-4 space-y-2">
-              <div className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider">
+          <div className="space-y-3.5 text-center py-1">
+            <div className="bg-indigo-50/90 border-2 border-dashed border-indigo-300 rounded-2xl p-3.5 space-y-2">
+              <div className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider">
                 Oda Kodun:
               </div>
-              <div className="text-3xl font-black text-indigo-950 font-mono tracking-widest select-all">
+              <div className="text-3xl sm:text-4xl font-black text-indigo-950 font-mono tracking-widest select-all">
                 {createdRoomCode}
               </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <button
+                  onClick={handleCopyCode}
+                  className="flex-1 py-1.5 px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {codeCopied ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{codeCopied ? 'Kopyalandı!' : 'Kodu Kopyala'}</span>
+                </button>
+
+                <button
+                  onClick={handleShareWhatsApp}
+                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+                  title="WhatsApp ile Paylaş"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+              </div>
+
+              <div className="pt-1">
+                <button
+                  onClick={handleCopyLink}
+                  className="text-[11px] text-indigo-700 hover:text-indigo-900 font-bold underline cursor-pointer flex items-center justify-center gap-1 mx-auto"
+                >
+                  <Share2 className="w-3 h-3" />
+                  <span>{linkCopied ? 'Bağlantı Panoya Kopyalandı!' : 'Doğrudan Katılma Linkini Kopyala'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Waiting indicator */}
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-center gap-2 text-xs font-bold text-amber-900 animate-pulse">
+              <Loader2 className="w-4 h-4 animate-spin text-amber-600" />
+              <span>Arkadaşının katılması bekleniyor...</span>
+            </div>
+
+            {/* Test on same device button */}
+            <div className="pt-1">
               <button
-                onClick={handleCopyCode}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                type="button"
+                onClick={handleOpenSecondTabTest}
+                className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
               >
-                {copied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-300" />
-                    <span>Kopyalandı!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Kodu Kopyala</span>
-                  </>
-                )}
+                <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Bu Cihazda İkinci Sekmede Test Et</span>
               </button>
             </div>
-
-            <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-600 animate-pulse">
-              <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-              <span>İkinci oyuncu bekleniyor...</span>
-            </div>
-
-            <p className="text-[11px] text-slate-500">
-              Bu kodu arkadaşına gönder. O da "Odaya Katıl" ekranına bu kodu girdiğinde maç 10 tur boyunca otomatik başlayacak!
-            </p>
 
             <button
               onClick={() => {
                 setIsWaiting(false);
+                onlineService.leaveRoom();
                 setMode('select');
               }}
               className="text-xs text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
             >
-              İptal Et
+              İptal Et ve Geri Dön
             </button>
           </div>
         )}
@@ -295,7 +355,7 @@ export const OnlineLobbyModal: React.FC<Props> = ({
         {mode === 'join' && (
           <form onSubmit={handleJoinRoom} className="space-y-3.5 py-1">
             <p className="text-xs text-slate-600 font-medium">
-              Arkadaşının kurduğu odanın kod numarasını gir:
+              Arkadaşının verdiği 4 haneli oda kodunu gir:
             </p>
 
             <div>
@@ -307,11 +367,11 @@ export const OnlineLobbyModal: React.FC<Props> = ({
                   setInputCode(e.target.value.toUpperCase());
                   if (error) setError('');
                 }}
-                placeholder="Örn: HA-4821"
+                placeholder="Örn: 4821 veya HA-4821"
                 autoFocus
-                className="w-full text-center text-xl font-mono font-black py-2.5 rounded-xl bg-slate-50 border-2 border-slate-300 focus:bg-white focus:border-indigo-500 focus:outline-none tracking-wider uppercase text-slate-900"
+                className="w-full text-center text-2xl font-mono font-black py-3 rounded-2xl bg-slate-50 border-2 border-slate-300 focus:bg-white focus:border-indigo-500 focus:outline-none tracking-widest uppercase text-slate-900"
               />
-              {error && <p className="text-[11px] text-rose-600 font-bold mt-1 text-center">{error}</p>}
+              {error && <p className="text-[11px] text-rose-600 font-bold mt-1.5 text-center">{error}</p>}
             </div>
 
             <div className="flex items-center gap-2">
@@ -328,7 +388,7 @@ export const OnlineLobbyModal: React.FC<Props> = ({
                 className="flex-[1.8] py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-xs shadow-md shadow-indigo-300/50 flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                <span>Odaya Katıl & Oyna</span>
+                <span>Odaya Katıl & Başla</span>
               </button>
             </div>
           </form>

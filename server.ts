@@ -44,22 +44,53 @@ async function startServer() {
     code: string;
     createdAt: number;
     hostId: string;
+    guestId?: string;
     status: 'waiting' | 'playing' | 'scored' | 'finished';
     currentLetter: string;
     roundNumber: number;
     maxRounds: number;
     roundTimeLimit: number; // 30, 45, 60, 120 seconds
     stoppedBy?: string;
-    results?: Record<string, any>;
+    results?: any;
     players: Record<string, RoomPlayer>;
     lastActivity: number;
   }
 
   const ONLINE_ROOMS: Map<string, RoomState> = new Map();
+  const ROOM_SSE_CLIENTS: Map<string, Set<express.Response>> = new Map();
   const TURKISH_LETTERS = ['A', 'B', 'C', 'Ç', 'D', 'E', 'F', 'G', 'H', 'İ', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'Ş', 'T', 'U', 'Ü', 'V', 'Y', 'Z'];
 
   function getRandomLetter(): string {
     return TURKISH_LETTERS[Math.floor(Math.random() * TURKISH_LETTERS.length)];
+  }
+
+  function normalizeRoomCode(raw: string): string {
+    if (!raw) return '';
+    let s = String(raw).trim().toUpperCase();
+    const match = s.match(/(?:ODA|ROOM|JOIN)[=:]([A-Z0-9-]+)/i);
+    if (match && match[1]) s = match[1];
+    const four = s.match(/\b\d{4}\b/);
+    if (four) return `HA-${four[0]}`;
+    const haMatch = s.match(/HA[-_ ]?([0-9]{4})/i);
+    if (haMatch && haMatch[1]) return `HA-${haMatch[1]}`;
+    const digitsOnly = s.replace(/[^0-9]/g, '');
+    if (digitsOnly.length === 4) return `HA-${digitsOnly}`;
+    return s.replace(/[^A-Z0-9-]/g, '');
+  }
+
+  function broadcastRoomUpdate(code: string, room: RoomState) {
+    const norm = normalizeRoomCode(code);
+    const clients = ROOM_SSE_CLIENTS.get(norm);
+    if (clients && clients.size > 0) {
+      const payload = `data: ${JSON.stringify(room)}\n\n`;
+      for (const res of clients) {
+        try {
+          res.write(payload);
+        } catch {
+          clients.delete(res);
+        }
+      }
+    }
   }
 
   // Periodic room cleanup (older than 2 hours)
@@ -106,25 +137,38 @@ async function startServer() {
     return res.json({ success: true, roomCode: code, playerId: hostId, room: newRoom });
   });
 
-  // 2. Join Room
+  // 2. Join Room (Guest) - Flexible code parsing and instant launch
   app.post("/api/rooms/join", (req, res) => {
     const { roomCode, guestName, guestAvatar } = req.body;
     if (!roomCode) {
-      return res.status(400).json({ error: "Oda kodu gerekli" });
+      return res.status(400).json({ error: "Oda kodu girilmedi." });
     }
 
-    const cleanCode = roomCode.trim().toUpperCase();
-    const room = ONLINE_ROOMS.get(cleanCode);
+    const cleanCode = normalizeRoomCode(roomCode);
+    let room = ONLINE_ROOMS.get(cleanCode);
     if (!room) {
-      return res.status(404).json({ error: "Oda bulunamadı. Kodu kontrol edin." });
+      // Fallback scan
+      for (const [k, r] of ONLINE_ROOMS.entries()) {
+        if (normalizeRoomCode(k) === cleanCode) {
+          room = r;
+          break;
+        }
+      }
+    }
+
+    if (!room) {
+      return res.status(404).json({ 
+        error: `Oda bulunamadı (${cleanCode}). Oda sahibinin 'Oda Kur' ekranında beklediğinden emin olun.` 
+      });
     }
 
     const playerIds = Object.keys(room.players);
     if (playerIds.length >= 2) {
-      return res.status(400).json({ error: "Bu oda maalesef dolu (2/2 oyuncu)." });
+      return res.status(400).json({ error: "Bu oda maalesef dolu (2/2 oyuncu katılmış)." });
     }
 
     const guestId = `p_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 4)}`;
+    room.guestId = guestId;
     room.players[guestId] = {
       id: guestId,
       name: (guestName || 'Oyuncu 2').trim(),
@@ -135,18 +179,55 @@ async function startServer() {
       roundScore: 0
     };
 
-    // Both players joined -> Game starts!
+    // Both players joined -> Game immediately starts!
     room.status = 'playing';
-    room.currentLetter = getRandomLetter();
     room.roundNumber = 1;
     room.lastActivity = Date.now();
 
-    return res.json({ success: true, roomCode: cleanCode, playerId: guestId, room });
+    // Broadcast to host waiting in lobby via SSE
+    broadcastRoomUpdate(room.code, room);
+
+    return res.json({ success: true, roomCode: room.code, playerId: guestId, room });
   });
 
-  // 3. Get Room Status (Polled by clients)
+  // 2.5 Real-Time Server-Sent Events (SSE) stream for instantaneous room sync
+  app.get("/api/rooms/:code/events", (req, res) => {
+    const cleanCode = normalizeRoomCode(req.params.code);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    if (!ROOM_SSE_CLIENTS.has(cleanCode)) {
+      ROOM_SSE_CLIENTS.set(cleanCode, new Set());
+    }
+    const clients = ROOM_SSE_CLIENTS.get(cleanCode)!;
+    clients.add(res);
+
+    // Immediately push current room state
+    const room = ONLINE_ROOMS.get(cleanCode);
+    if (room) {
+      res.write(`data: ${JSON.stringify(room)}\n\n`);
+    }
+
+    // Ping interval to keep connection alive
+    const ping = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        clearInterval(ping);
+      }
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(ping);
+      clients.delete(res);
+    });
+  });
+
+  // 3. Get Room Status (Polled by clients as backup)
   app.get("/api/rooms/:code", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
+    const cleanCode = normalizeRoomCode(req.params.code);
     const room = ONLINE_ROOMS.get(cleanCode);
     if (!room) {
       return res.status(404).json({ error: "Oda bulunamadı" });
@@ -157,7 +238,7 @@ async function startServer() {
 
   // 4. Update Player Progress (Answers & count)
   app.post("/api/rooms/:code/progress", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
+    const cleanCode = normalizeRoomCode(req.params.code);
     const { playerId, answers } = req.body;
     const room = ONLINE_ROOMS.get(cleanCode);
     if (!room || !room.players[playerId]) {
@@ -170,18 +251,26 @@ async function startServer() {
         (a: any) => typeof a === 'string' && a.trim().length > 0
       ).length;
       room.lastActivity = Date.now();
+      broadcastRoomUpdate(cleanCode, room);
     }
 
-    return res.json({ success: true });
+    return res.json({ success: true, room });
   });
 
   // 5. DUR! Button Pressed -> Immediately Score the Round for Both Players
   app.post("/api/rooms/:code/dur", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
-    const { playerId } = req.body;
+    const cleanCode = normalizeRoomCode(req.params.code);
+    const { playerId, answers } = req.body;
     const room = ONLINE_ROOMS.get(cleanCode);
     if (!room || !room.players[playerId]) {
       return res.status(404).json({ error: "Geçersiz oda veya oyuncu" });
+    }
+
+    if (answers && typeof answers === 'object') {
+      room.players[playerId].answers = answers;
+      room.players[playerId].filledCount = Object.values(answers).filter(
+        (a: any) => typeof a === 'string' && a.trim().length > 0
+      ).length;
     }
 
     if (room.status !== 'playing') {
@@ -194,17 +283,28 @@ async function startServer() {
 
     // Evaluate answers
     const playerIds = Object.keys(room.players);
-    const p1 = room.players[playerIds[0]];
-    const p2 = playerIds.length > 1 ? room.players[playerIds[1]] : null;
+    const p1Id = room.hostId || playerIds[0];
+    const p2Id = room.guestId || (playerIds.length > 1 ? playerIds.find(id => id !== p1Id) : null);
 
-    const categories = ['name', 'city', 'animal', 'plant', 'object', 'country'];
-    const results: Record<string, any> = {};
+    const p1 = room.players[p1Id];
+    const p2 = p2Id ? room.players[p2Id] : null;
+
+    const CATEGORIES = [
+      { id: 'name', name: 'İsim' },
+      { id: 'city', name: 'Şehir' },
+      { id: 'animal', name: 'Hayvan' },
+      { id: 'plant', name: 'Bitki' },
+      { id: 'object', name: 'Eşya' },
+      { id: 'country', name: 'Ülke' }
+    ];
+
+    const resultsList: any[] = [];
     let p1RoundPoints = 0;
     let p2RoundPoints = 0;
 
-    for (const cat of categories) {
-      const a1 = (p1.answers[cat] || '').trim().toLocaleLowerCase('tr-TR');
-      const a2 = p2 ? (p2.answers[cat] || '').trim().toLocaleLowerCase('tr-TR') : '';
+    for (const cat of CATEGORIES) {
+      const a1 = (p1.answers[cat.id] || '').trim().toLocaleLowerCase('tr-TR');
+      const a2 = p2 ? (p2.answers[cat.id] || '').trim().toLocaleLowerCase('tr-TR') : '';
 
       const targetLetterLower = room.currentLetter.toLocaleLowerCase('tr-TR');
       const p1Valid = a1.length > 0 && a1.startsWith(targetLetterLower);
@@ -252,15 +352,17 @@ async function startServer() {
       p1RoundPoints += p1Pts;
       p2RoundPoints += p2Pts;
 
-      results[cat] = {
-        p1Answer: p1.answers[cat] || '',
+      resultsList.push({
+        categoryId: cat.id,
+        categoryName: cat.name,
+        p1Word: p1.answers[cat.id] || '',
         p1Status,
         p1Points: p1Pts,
-        p2Answer: p2 ? (p2.answers[cat] || '') : '',
+        p2Word: p2 ? (p2.answers[cat.id] || '') : '',
         p2Status,
         p2Points: p2Pts,
         isPisti: p1Status === 'pisti'
-      };
+      });
     }
 
     p1.roundScore = p1RoundPoints;
@@ -270,7 +372,7 @@ async function startServer() {
       p2.totalScore += p2RoundPoints;
     }
 
-    room.results = results;
+    room.results = resultsList;
 
     // Check 10-round tournament completion
     if (room.roundNumber >= room.maxRounds) {
@@ -278,12 +380,13 @@ async function startServer() {
     }
 
     room.lastActivity = Date.now();
-    return res.json({ success: true, room });
+    broadcastRoomUpdate(cleanCode, room);
+    return res.json({ success: true, room, results: resultsList });
   });
 
   // 6. Next Round (Yeni Harf)
   app.post("/api/rooms/:code/next-round", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
+    const cleanCode = normalizeRoomCode(req.params.code);
     const room = ONLINE_ROOMS.get(cleanCode);
     if (!room) {
       return res.status(404).json({ error: "Oda bulunamadı" });
@@ -291,6 +394,7 @@ async function startServer() {
 
     if (room.roundNumber >= room.maxRounds) {
       room.status = 'finished';
+      broadcastRoomUpdate(cleanCode, room);
       return res.json({ room });
     }
 
@@ -307,12 +411,13 @@ async function startServer() {
     }
 
     room.lastActivity = Date.now();
+    broadcastRoomUpdate(cleanCode, room);
     return res.json({ success: true, room });
   });
 
   // 7. Rematch (Rövanş Teklif Et)
   app.post("/api/rooms/:code/rematch", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
+    const cleanCode = normalizeRoomCode(req.params.code);
     const room = ONLINE_ROOMS.get(cleanCode);
     if (!room) {
       return res.status(404).json({ error: "Oda bulunamadı" });
@@ -332,12 +437,13 @@ async function startServer() {
     }
 
     room.lastActivity = Date.now();
+    broadcastRoomUpdate(cleanCode, room);
     return res.json({ success: true, room });
   });
 
   // 8. Leave Room
   app.post("/api/rooms/:code/leave", (req, res) => {
-    const cleanCode = req.params.code.trim().toUpperCase();
+    const cleanCode = normalizeRoomCode(req.params.code);
     const { playerId } = req.body;
     const room = ONLINE_ROOMS.get(cleanCode);
     if (room) {
@@ -347,6 +453,7 @@ async function startServer() {
       } else {
         room.status = 'waiting';
       }
+      broadcastRoomUpdate(cleanCode, room);
     }
     return res.json({ success: true });
   });

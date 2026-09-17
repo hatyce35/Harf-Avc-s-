@@ -354,30 +354,53 @@ export const OnlineLobbyModal: React.FC<Props> = ({
         {/* Guest Join View */}
         {mode === 'join' && (
           <form onSubmit={handleJoinRoom} className="space-y-3.5 py-1">
-            <p className="text-xs text-slate-600 font-medium">
-              Arkadaşının verdiği 4 haneli oda kodunu gir:
-            </p>
-
             <div>
-              <input
-                type="text"
-                maxLength={8}
-                value={inputCode}
-                onChange={e => {
-                  setInputCode(e.target.value.toUpperCase());
-                  if (error) setError('');
-                }}
-                placeholder="Örn: 4821 veya HA-4821"
-                autoFocus
-                className="w-full text-center text-2xl font-mono font-black py-3 rounded-2xl bg-slate-50 border-2 border-slate-300 focus:bg-white focus:border-indigo-500 focus:outline-none tracking-widest uppercase text-slate-900"
-              />
-              {error && <p className="text-[11px] text-rose-600 font-bold mt-1.5 text-center">{error}</p>}
+              <label className="block text-xs text-slate-600 font-medium mb-1.5">
+                Arkadaşının verdiği 4 haneli oda kodunu veya davet linkini gir:
+              </label>
+
+              <div className="relative">
+                <input
+                  type="text"
+                  maxLength={160}
+                  value={inputCode}
+                  onChange={e => {
+                    setInputCode(e.target.value);
+                    if (error) setError('');
+                  }}
+                  placeholder="Örn: 4821 veya HA-4821"
+                  autoFocus
+                  className="w-full text-center text-xl sm:text-2xl font-mono font-black py-3 px-4 rounded-2xl bg-slate-50 border-2 border-slate-300 focus:bg-white focus:border-indigo-500 focus:outline-none tracking-widest uppercase text-slate-900 shadow-inner"
+                />
+              </div>
+
+              {/* Detected normalized code preview */}
+              {inputCode.trim() && (() => {
+                const normalized = onlineService.normalizeCode(inputCode);
+                if (normalized && normalized.startsWith('HA-') && normalized.length === 7) {
+                  return (
+                    <div className="mt-1.5 text-center text-[11px] font-bold text-emerald-700 bg-emerald-50 py-1 px-2.5 rounded-lg border border-emerald-200 inline-block w-full">
+                      ✓ Algılanan Kod: <span className="font-mono tracking-wider">{normalized}</span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {error && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold text-center mt-2">
+                  {error}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => setMode('select')}
+                onClick={() => {
+                  setError('');
+                  setMode('select');
+                }}
                 className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
               >
                 Geri
@@ -385,10 +408,10 @@ export const OnlineLobbyModal: React.FC<Props> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-[1.8] py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-xs shadow-md shadow-indigo-300/50 flex items-center justify-center gap-1.5 cursor-pointer"
+                className="flex-[1.8] py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-xs shadow-md shadow-indigo-300/50 flex items-center justify-center gap-1.5 cursor-pointer active:scale-[0.98] transition-transform"
               >
                 {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                <span>Odaya Katıl & Başla</span>
+                <span>{loading ? 'Odaya Giriliyor...' : 'Odaya Katıl & Başla'}</span>
               </button>
             </div>
           </form>

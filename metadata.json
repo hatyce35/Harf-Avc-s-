@@ -1,0 +1,6 @@
+{
+  "name": "Harf Avcısı",
+  "description": "Pratik, tek sayfada ve sırayla oynanan sade İsim-Şehir-Hayvan kelime oyunu.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

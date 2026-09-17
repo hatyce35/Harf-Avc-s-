@@ -24,6 +24,14 @@ export const OnlineLobbyModal: React.FC<Props> = ({
   const [isWaiting, setIsWaiting] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selectedTimeLimit, setSelectedTimeLimit] = useState<number>(60);
+
+  const TIME_OPTIONS = [
+    { value: 30, label: '30 sn', desc: 'Yıldırım' },
+    { value: 45, label: '45 sn', desc: 'Hızlı' },
+    { value: 60, label: '60 sn', desc: 'Standart' },
+    { value: 120, label: '120 sn', desc: 'Geniş' },
+  ];
 
   // Poll room status when host is waiting for guest
   useEffect(() => {
@@ -61,7 +69,8 @@ export const OnlineLobbyModal: React.FC<Props> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           hostName: activeProfile.name,
-          hostAvatar: activeProfile.avatar
+          hostAvatar: activeProfile.avatar,
+          roundTimeLimit: selectedTimeLimit
         })
       });
       const data = await res.json();
@@ -164,22 +173,52 @@ export const OnlineLobbyModal: React.FC<Props> = ({
             </p>
 
             <div className="grid grid-cols-1 gap-2.5 pt-1">
-              <button
-                onClick={handleCreateRoom}
-                disabled={loading}
-                className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold text-sm shadow-md shadow-indigo-300/40 active:scale-[0.99] flex items-center justify-between transition-all cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-base">
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 border-2 border-indigo-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">⏱️</span>
+                    <span className="text-xs font-black text-indigo-950">Tur Süresi Seç:</span>
+                  </div>
+                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-md">
+                    {TIME_OPTIONS.find(t => t.value === selectedTimeLimit)?.desc}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-4 gap-1.5">
+                  {TIME_OPTIONS.map(opt => {
+                    const isSelected = selectedTimeLimit === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          soundManager.playClick();
+                          setSelectedTimeLimit(opt.value);
+                        }}
+                        className={`py-1.5 px-1 rounded-xl text-center border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs font-black scale-102'
+                            : 'bg-white text-slate-700 border-indigo-200/80 hover:bg-indigo-100/50 font-bold text-xs'
+                        }`}
+                      >
+                        <div className="text-[11px] leading-tight">{opt.label}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <button
+                  onClick={handleCreateRoom}
+                  disabled={loading}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-xs shadow-md shadow-indigo-300/40 active:scale-[0.99] flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <div className="w-5 h-5 rounded-lg bg-white/20 flex items-center justify-center text-xs">
                     🏠
                   </div>
-                  <div className="text-left">
-                    <div className="leading-tight">Yeni Oda Kur</div>
-                    <div className="text-[10px] text-indigo-100 font-normal">Kod oluştur ve arkadaşını davet et</div>
-                  </div>
-                </div>
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
-              </button>
+                  <span>Odayı Oluştur ve Kod Al ({selectedTimeLimit} sn)</span>
+                  {loading && <Loader2 className="w-4 h-4 animate-spin ml-1" />}
+                </button>
+              </div>
 
               <button
                 onClick={() => {

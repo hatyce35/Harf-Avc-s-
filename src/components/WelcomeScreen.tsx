@@ -20,7 +20,7 @@ interface Props {
   activeProfile: UserProfile;
   onOpenSettings: () => void;
   onStartSolo: () => void;
-  onStartAIBattle: (difficulty: BotDifficulty) => void;
+  onStartAIBattle: (difficulty: BotDifficulty, timeLimit: number) => void;
   onOpenOnlineDuel: () => void;
 }
 
@@ -32,9 +32,16 @@ export const WelcomeScreen: React.FC<Props> = ({
   onOpenOnlineDuel
 }) => {
   const [selectedDifficulty, setSelectedDifficulty] = useState<BotDifficulty>('medium');
+  const [selectedTimeLimit, setSelectedTimeLimit] = useState<number>(60);
   const [showAIDifficultyPicker, setShowAIDifficultyPicker] = useState(false);
 
   const difficultyList: BotDifficulty[] = ['very_easy', 'easy', 'medium', 'hard', 'very_hard'];
+  const TIME_OPTIONS = [
+    { value: 30, label: '30 sn', desc: 'Yıldırım' },
+    { value: 45, label: '45 sn', desc: 'Hızlı' },
+    { value: 60, label: '60 sn', desc: 'Standart' },
+    { value: 120, label: '120 sn', desc: 'Geniş' },
+  ];
 
   return (
     <div className="w-full h-full flex flex-col justify-between py-2 sm:py-3 px-3 sm:px-4 max-w-md mx-auto relative overflow-hidden">
@@ -198,16 +205,52 @@ export const WelcomeScreen: React.FC<Props> = ({
                 })}
               </div>
 
+              {/* Time Limit Selector */}
+              <div className="pt-1 border-t border-amber-200/80">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1">
+                    <span>⏱️</span>
+                    <span>Tur Süresi:</span>
+                  </span>
+                  <span className="text-[9px] font-black text-amber-800 bg-amber-200/70 px-2 py-0.5 rounded-full">
+                    {TIME_OPTIONS.find(t => t.value === selectedTimeLimit)?.desc}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-4 gap-1">
+                  {TIME_OPTIONS.map(opt => {
+                    const isSelected = selectedTimeLimit === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          soundManager.playClick();
+                          setSelectedTimeLimit(opt.value);
+                        }}
+                        className={`py-1.5 px-1 rounded-xl text-center border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-amber-600 text-white border-amber-700 shadow-2xs font-black scale-102'
+                            : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50 font-bold text-[11px]'
+                        }`}
+                      >
+                        <div className="leading-tight">{opt.label}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Start AI Battle Button */}
               <button
                 onClick={() => {
                   soundManager.playClick();
-                  onStartAIBattle(selectedDifficulty);
+                  onStartAIBattle(selectedDifficulty, selectedTimeLimit);
                 }}
                 className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Play className="w-3.5 h-3.5 fill-current" />
-                <span>{BOT_DIFFICULTIES[selectedDifficulty].name} Bot ile Başla (10 Tur)</span>
+                <span>{BOT_DIFFICULTIES[selectedDifficulty].name} Bot ({selectedTimeLimit} sn) Başla</span>
               </button>
             </div>
           )}

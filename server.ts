@@ -48,6 +48,7 @@ async function startServer() {
     currentLetter: string;
     roundNumber: number;
     maxRounds: number;
+    roundTimeLimit: number; // 30, 45, 60, 120 seconds
     stoppedBy?: string;
     results?: Record<string, any>;
     players: Record<string, RoomPlayer>;
@@ -73,9 +74,10 @@ async function startServer() {
 
   // 1. Create Room
   app.post("/api/rooms/create", (req, res) => {
-    const { hostName, hostAvatar } = req.body;
+    const { hostName, hostAvatar, roundTimeLimit } = req.body;
     const code = `HA-${Math.floor(1000 + Math.random() * 9000)}`;
     const hostId = `p_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 4)}`;
+    const validTimeLimit = [30, 45, 60, 120].includes(Number(roundTimeLimit)) ? Number(roundTimeLimit) : 60;
 
     const newRoom: RoomState = {
       code,
@@ -85,6 +87,7 @@ async function startServer() {
       currentLetter: getRandomLetter(),
       roundNumber: 1,
       maxRounds: 10,
+      roundTimeLimit: validTimeLimit,
       players: {
         [hostId]: {
           id: hostId,

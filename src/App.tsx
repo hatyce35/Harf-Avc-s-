@@ -44,6 +44,9 @@ import { OnlineLobbyModal } from './components/OnlineLobbyModal';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { RoundResultScreen, CategoryResultItem } from './components/RoundResultScreen';
 import { TournamentEndModal } from './components/TournamentEndModal';
+import { SparkleAura } from './components/SparkleAura';
+import { TimerBar } from './components/TimerBar';
+import { triggerStarSparkles } from './utils/sparkleEffects';
 
 // 6 Classic Turkish Name-City-Animal categories
 export interface CategoryConfig {
@@ -120,6 +123,11 @@ export default function App() {
   const [activeCategoryIndex, setActiveCategoryIndex] = useState<number>(0);
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const currentInputRef = useRef<HTMLInputElement | null>(null);
+
+  // --- ROUND TIMER STATE (30, 45, 60, 120 sn) ---
+  const [roundTimeLimit, setRoundTimeLimit] = useState<number | null>(60);
+  const [timeLeft, setTimeLeft] = useState<number>(60);
+  const handleDurRef = useRef<() => void>(() => {});
 
   // --- AI OPPONENT STATE ---
   const [botOpponent, setBotOpponent] = useState<GeneratedBot>(() => generateRandomBot('medium'));
@@ -268,11 +276,48 @@ export default function App() {
     soundManager.playFanfare();
   };
 
+  // Keep fresh reference of handleDur for timer callback
+  useEffect(() => {
+    handleDurRef.current = handleDur;
+  });
+
+  // Countdown Timer Effect for AI & Online (and when roundTimeLimit is set)
+  useEffect(() => {
+    if (currentView !== 'playing' || isValidating || !roundTimeLimit) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          // Time's up! Automatically trigger Dur!
+          handleDurRef.current();
+          return 0;
+        }
+
+        // Tick sounds in last 10 seconds
+        if (prev <= 11 && prev > 1) {
+          if (prev <= 6) {
+            soundManager.playUrgentTick();
+          } else {
+            soundManager.playCountdownTick();
+          }
+        }
+
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentView, isValidating, roundTimeLimit]);
+
   // --- START MODES ---
 
   // 1. Start Solo
   const handleStartSolo = () => {
+    soundManager.playLetterReveal();
     setGameMode('solo');
+    setRoundTimeLimit(null);
+    setTimeLeft(0);
     setRoundNumber(1);
     setP1TournamentScore(0);
     setP2TournamentScore(0);
@@ -282,11 +327,14 @@ export default function App() {
     setCurrentView('playing');
   };
 
-  // 2. Start AI Battle with Chosen Difficulty
-  const handleStartAIBattle = (difficulty: BotDifficulty) => {
+  // 2. Start AI Battle with Chosen Difficulty & Time Limit (30, 45, 60, 120 sn)
+  const handleStartAIBattle = (difficulty: BotDifficulty, timeLimit: number = 60) => {
+    soundManager.playLetterReveal();
     const newBot = generateRandomBot(difficulty);
     setBotOpponent(newBot);
     setGameMode('ai');
+    setRoundTimeLimit(timeLimit);
+    setTimeLeft(timeLimit);
     setRoundNumber(1);
     setP1TournamentScore(0);
     setP2TournamentScore(0);
@@ -299,10 +347,14 @@ export default function App() {
 
   // 3. Start Online Duel
   const handleOnlineRoomReady = (room: any, playerId: string) => {
+    soundManager.playLetterReveal();
     setOnlineRoomCode(room.code);
     setOnlinePlayerId(playerId);
     setOnlineRoomState(room);
     setGameMode('online');
+    const timeLimit = room.roundTimeLimit || 60;
+    setRoundTimeLimit(timeLimit);
+    setTimeLeft(timeLimit);
     setRoundNumber(room.roundNumber || 1);
     setP1TournamentScore(0);
     setP2TournamentScore(0);
@@ -333,7 +385,8 @@ export default function App() {
   // When user clicks the prominent red "DUR!" button
   const handleDur = async () => {
     if (isValidating) return;
-    soundManager.playStop();
+    soundManager.playDur();
+    triggerStarSparkles();
     setIsValidating(true);
 
     if (gameMode === 'online') {
@@ -472,6 +525,8 @@ export default function App() {
       return;
     }
 
+    soundManager.playLetterReveal();
+
     if (gameMode === 'online') {
       try {
         await fetch(`/api/rooms/${onlineRoomCode}/next-round`, { method: 'POST' });
@@ -493,16 +548,25 @@ export default function App() {
       prepareAIBot(nextLetter, botOpponent);
     }
 
+    if (roundTimeLimit) {
+      setTimeLeft(roundTimeLimit);
+    }
+
     resetRoundInputs();
     setCurrentView('playing');
   };
 
   // --- REMATCH & EXIT HANDLERS ---
   const handleRematch = async () => {
+    soundManager.playLetterReveal();
     setShowTournamentEnd(false);
     setRoundNumber(1);
     setP1TournamentScore(0);
     setP2TournamentScore(0);
+
+    if (roundTimeLimit) {
+      setTimeLeft(roundTimeLimit);
+    }
 
     if (gameMode === 'online') {
       try {
@@ -545,6 +609,7 @@ export default function App() {
 
   // Input change handler
   const handleAnswerChange = (text: string) => {
+    soundManager.playType();
     const currentCat = CATEGORIES[activeCategoryIndex];
     const updated = { ...answers, [currentCat.id]: text };
     setAnswers(updated);
@@ -776,6 +841,13 @@ export default function App() {
             </div>
           </section>
 
+          {/* TIMER BAR (30s, 45s, 60s, 120s limit for AI battles and Online duels) */}
+          {roundTimeLimit && (
+            <div className="shrink-0">
+              <TimerBar timeRemaining={timeLeft} totalTime={roundTimeLimit} />
+            </div>
+          )}
+
           {/* CATEGORY STEPPER (6 Kategorinin Kompakt Adım İkonları) */}
           <nav className="grid grid-cols-6 gap-1 shrink-0">
             {CATEGORIES.map((cat, idx) => {
@@ -811,16 +883,19 @@ export default function App() {
             })}
           </nav>
 
-          {/* HEDEF HARF: KATEGORİ ADIMLARI İLE GİRİŞ KARTININ TAM ORTASINDA, %100 DAHA BÜYÜK VE ÜSTÜNDE 'HEDEF HARF' YAZISI */}
+          {/* HEDEF HARF: KATEGORİ ADIMLARI İLE GİRİŞ KARTININ TAM ORTASINDA, %100 DAHA BÜYÜK VE IŞILTILI ANİMASYONLU */}
           <div className="flex flex-col items-center justify-center shrink-0 my-auto py-1 sm:py-2">
-            <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200/80 px-3 py-0.5 rounded-full mb-1.5 shadow-2xs">
-              Hedef Harf
+            <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-amber-800 bg-amber-100/90 border border-amber-300 px-3 py-0.5 rounded-full mb-1.5 shadow-2xs flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-amber-600 animate-spin" style={{ animationDuration: '6s' }} />
+              <span>Hedef Harf</span>
             </span>
-            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-[4px] sm:border-[5px] border-amber-500 bg-white flex items-center justify-center shadow-md ring-4 ring-amber-100">
-              <span className="text-5xl sm:text-6xl font-black text-amber-950 font-display leading-none select-none">
-                {targetLetter}
-              </span>
-            </div>
+            <SparkleAura active={true}>
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-[4px] sm:border-[5px] border-amber-500 bg-white flex items-center justify-center shadow-md ring-4 ring-amber-100 animate-float-cute animate-halo-shimmer">
+                <span className="text-5xl sm:text-6xl font-black text-amber-950 font-display leading-none select-none">
+                  {targetLetter}
+                </span>
+              </div>
+            </SparkleAura>
           </div>
 
           {/* ACTIVE CATEGORY INPUT CARD (DİKDÖRTGEN KART) */}

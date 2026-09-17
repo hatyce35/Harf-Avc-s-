@@ -14,6 +14,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { soundManager } from '../services/sound';
+import { triggerStarSparkles } from '../utils/sparkleEffects';
 
 export interface CategoryResultItem {
   categoryId: string;
@@ -67,6 +68,16 @@ export const RoundResultScreen: React.FC<Props> = ({
 }) => {
   const [countdown, setCountdown] = useState(10);
   const [isPaused, setIsPaused] = useState(false);
+
+  // Play cute sound and sparkles on round results
+  useEffect(() => {
+    if (p1RoundScore > 0) {
+      soundManager.playSparkle();
+      triggerStarSparkles({ x: 0.5, y: 0.3 });
+    } else {
+      soundManager.playInvalid();
+    }
+  }, []);
 
   // 10-second automatic countdown timer
   useEffect(() => {

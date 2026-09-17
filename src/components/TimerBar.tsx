@@ -11,59 +11,52 @@ export const TimerBar: React.FC<TimerBarProps> = ({ timeRemaining, totalTime }) 
   const isCritical = timeRemaining <= 10;
   const isUrgent = timeRemaining <= 5;
 
-  // Speed bonus tiers
-  const isMaxSpeed = timeRemaining >= totalTime * 0.6;
-  const isMidSpeed = timeRemaining >= totalTime * 0.3 && !isMaxSpeed;
-
   return (
-    <div className="w-full bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shadow-lg">
-      <div className="flex items-center justify-between mb-2">
+    <div className="w-full bg-white/90 backdrop-blur-xs border-2 border-amber-200/90 rounded-2xl p-2 sm:p-2.5 shadow-2xs">
+      <div className="flex items-center justify-between mb-1.5 px-0.5">
         {/* Timer countdown with warning colors */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <div
-            className={`p-1.5 rounded-lg transition-colors ${
+            className={`p-1 rounded-lg transition-colors ${
               isCritical
-                ? 'bg-rose-500/20 text-rose-400 animate-pulse'
-                : 'bg-emerald-500/20 text-emerald-400'
+                ? 'bg-rose-100 text-rose-600 animate-pulse'
+                : 'bg-amber-100 text-amber-700'
             }`}
           >
-            <Clock className="w-4 h-4" />
+            <Clock className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <div className="flex items-baseline gap-1.5">
-              <span
-                className={`text-2xl font-black font-display tracking-tight transition-transform ${
-                  isUrgent
-                    ? 'text-rose-400 scale-110 animate-ping'
-                    : isCritical
-                    ? 'text-rose-400 scale-105'
-                    : 'text-white'
-                }`}
-              >
-                {timeRemaining}
-              </span>
-              <span className="text-xs text-slate-400 font-semibold">sn</span>
-            </div>
+          <div className="flex items-baseline gap-1">
+            <span
+              className={`text-base sm:text-lg font-black font-display tracking-tight transition-transform ${
+                isUrgent
+                  ? 'text-rose-600 scale-110 font-mono animate-bounce'
+                  : isCritical
+                  ? 'text-rose-600 scale-105 font-mono'
+                  : 'text-slate-900 font-mono'
+              }`}
+            >
+              {timeRemaining}
+            </span>
+            <span className="text-[10px] text-slate-500 font-bold">/ {totalTime} sn</span>
           </div>
         </div>
 
-        {/* Speed bonus status badge */}
-        <div className="flex items-center gap-1 text-xs">
-          <Zap className={`w-3.5 h-3.5 ${isMaxSpeed ? 'text-amber-400 animate-bounce' : isMidSpeed ? 'text-sky-400' : 'text-slate-500'}`} />
-          <span className="font-bold text-slate-300">
-            {isMaxSpeed ? (
-              <span className="text-amber-400">Hız Bonusu: +10 Puan</span>
-            ) : isMidSpeed ? (
-              <span className="text-sky-400">Hız Bonusu: +6 Puan</span>
-            ) : (
-              <span className="text-slate-400">Hız Bonusu: Normal</span>
-            )}
-          </span>
+        {/* Status text */}
+        <div className="flex items-center gap-1 text-[11px] font-bold">
+          {isCritical ? (
+            <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200 animate-pulse">
+              Acele et! ⏳
+            </span>
+          ) : (
+            <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+              Kalan Süre
+            </span>
+          )}
         </div>
       </div>
 
       {/* Progress Track */}
-      <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700/40">
+      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200/70">
         <div
           className={`h-full rounded-full transition-all duration-300 ${
             isCritical
@@ -78,3 +71,4 @@ export const TimerBar: React.FC<TimerBarProps> = ({ timeRemaining, totalTime }) 
     </div>
   );
 };
+

@@ -153,11 +153,6 @@ export const OnlineLobbyModal: React.FC<Props> = ({
     window.open(waUrl, '_blank');
   };
 
-  const handleOpenSecondTabTest = () => {
-    const url = getInviteUrl();
-    window.open(url, '_blank');
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-sm animate-fadeIn">
       <div className="bg-white border-2 border-indigo-300 rounded-3xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4 relative overflow-hidden">
@@ -326,16 +321,17 @@ export const OnlineLobbyModal: React.FC<Props> = ({
               <span>Arkadaşının katılması bekleniyor...</span>
             </div>
 
-            {/* Test on same device button */}
+            {/* Test on same device button (native anchor so no browser popup blocker can block it) */}
             <div className="pt-1">
-              <button
-                type="button"
-                onClick={handleOpenSecondTabTest}
-                className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              <a
+                href={getInviteUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-center block"
               >
-                <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Bu Cihazda İkinci Sekmede Test Et</span>
-              </button>
+                <ExternalLink className="w-3.5 h-3.5 text-indigo-600 inline" />
+                <span>Bu Cihazda İkinci Sekmede Aç & Test Et</span>
+              </a>
             </div>
 
             <button
